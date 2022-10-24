@@ -285,7 +285,7 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
         require(from != address(0), "BEP20: transfer from the zero address");
         require(to != address(0), "BEP20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
-
+        _beforeTokenTransfer(from, to, amount);
         if (from != owner() && to != owner() && !_isExcludedFromFee[from] && !_isExcludedFromFee[to]) {
             require(tradeAllowed);
             require(!_isBlacklisted[from] && !_isBlacklisted[to]);
@@ -313,6 +313,7 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
                 if (contractETHBalance > 0) {
                     swapETHfortargetToken(address(this).balance);
                 }
+                
             }
 
 
@@ -342,6 +343,8 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
         }
         _tokenTransfer(from, to, amount, takeFee);
         restoreAllFee;
+
+        _afterTokenTransfer(from, to, amount);
     }
 
     function removeAllFee() private {
