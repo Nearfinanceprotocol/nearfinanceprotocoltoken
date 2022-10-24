@@ -7,6 +7,7 @@ import {Context} from "./utils/Context.sol";
 import {Ownable} from "./utils/Ownable.sol";
 import {IPancakeFactory} from "./interfaces/IPancakeFactory.sol";
 import {IPancakeRouter02} from "./interfaces/IPancakeRouter02.sol";
+import {SafeMath} from "./libraries/SafeMath.sol";
 
 
 
@@ -19,6 +20,7 @@ struct User {
 
 
 contract NearFinanceProtocol is ERC20Snapshot, Ownable {
+    using SafeMath for uint256;
 
     /**
      * ===================================================
@@ -187,14 +189,267 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
         _approve(_msgSender(), spender, amount);
         return true;
     }
+
     /// @notice this is the function to call if yoour account has been approved to spend token from another account 
     function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
         _transfer(sender, recipient, amount);
         _approve(sender,_msgSender(),_allowances[sender][_msgSender()].sub(amount,"BEP20: transfer amount exceeds allowance"));
         return true;
     }
+
     /// @notice this function is used to toggle the fees on transfer 
     function setFeeEnabled(bool enable) external onlyOwner {
         feeEnabled = enable;
     }
+
+    /// @notice this is a function that would be used to toggle transaction limitation
+    function setLimitTx(bool enable) external onlyOwner {
+        limitTX = enable;
+    }
+
+    /// @notice this function would be used to enable trading after liquidity has been added 
+    function enableTrading(bool enable) external onlyOwner {
+        require(liquidityAdded);
+        tradeAllowed = enable;
+        //  first 5 minutes after launch.
+        buyLimitEnd = block.timestamp + (300 seconds);
+    }
+
+    /// @notice this function woould be used to add the first liquidty 
+    function addLiquidity() external onlyOwner() {
+        IPancakeRouter02 _pancakeV2Router = IPancakeRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        pancakeV2Router = _pancakeV2Router;
+        _approve(address(this), address(pancakeV2Router), _tTotal);
+        pancakeswapPair = IPancakeFactory(_pancakeV2Router.factory()).createPair(address(this), _pancakeV2Router.WETH());
+        pancakeV2Router.addLiquidityETH{value: address(this).balance}(address(this),balanceOf(address(this)),0,0,owner(),block.timestamp);
+        swapEnabled = true;
+        liquidityAdded = true;
+        feeEnabled = true;
+        limitTX = true;
+        _maxTxAmount = 100000 * 10**18;
+        _maxBuyAmount = 10000 * 10**18; //1% buy cap
+        IBEP20(pancakeswapPair).approve(address(pancakeV2Router),type(uint256).max);
+    }
+
+    function manualSwapTokensForEth() external onlyOwner() {
+        uint256 contractBalance = balanceOf(address(this));
+        swapTokensForEth(contractBalance);
+    }
+
+    function manualDistributeETH() external onlyOwner() {
+        uint256 contractETHBalance = address(this).balance;
+        distributeETH(contractETHBalance);
+    }
+
+    function manualSwapEthForTargetToken(uint amount) external onlyOwner() {
+        swapETHfortargetToken(amount);
+    }
+
+    function setMaxTxPercent(uint256 maxTxPercent) external onlyOwner() {
+        require(maxTxPercent > 0, "Amount must be greater than 0");
+        _maxTxAmount = _tTotal.mul(maxTxPercent).div(10**2);
+        emit MaxTxAmountUpdated(_maxTxAmount);
+    }
+
+    function setCooldownEnabled(bool onoff) external onlyOwner() {
+        _cooldownEnabled = onoff;
+        emit CooldownEnabledUpdated(_cooldownEnabled);
+    }
+
+    function timeToBuy(address buyer) public view returns (uint) {
+        return block.timestamp - cooldown[buyer].buy;
+    }
+
+    function timeToSell(address buyer) public view returns (uint) {
+        return block.timestamp - cooldown[buyer].sell;
+    }
+
+    function amountInPool() public view returns (uint) {
+        return balanceOf(pancakeswapPair);
+    }
+
+    function tokenFromReflection(uint256 rAmount) private view returns (uint256) {
+        require(rAmount <= _rTotal,"Amount must be less than total reflections");
+        uint256 currentRate = _getRate();
+        return rAmount.div(currentRate);
+    }
+
+    function _approve(address owner, address spender, uint256 amount) private {
+        require(owner != address(0), "BEP20: approve from the zero address");
+        require(spender != address(0), "BEP20: approve to the zero address");
+        _allowances[owner][spender] = amount;
+        emit Approval(owner, spender, amount);
+    }
+
+    function _transfer(address from, address to, uint256 amount) private {
+        require(from != address(0), "BEP20: transfer from the zero address");
+        require(to != address(0), "BEP20: transfer to the zero address");
+        require(amount > 0, "Transfer amount must be greater than zero");
+
+        if (from != owner() && to != owner() && !_isExcludedFromFee[from] && !_isExcludedFromFee[to]) {
+            require(tradeAllowed);
+            require(!_isBlacklisted[from] && !_isBlacklisted[to]);
+            if(_cooldownEnabled) {
+                if(!cooldown[msg.sender].exists) {
+                    cooldown[msg.sender] = User(0,0,true);
+                }
+            }
+
+            if (from == pancakeswapPair && to != address(pancakeV2Router)) {
+                if (limitTX) {
+                    require(amount <= _maxTxAmount);
+                }
+                if(_cooldownEnabled) {
+                    if(buyLimitEnd > block.timestamp) {
+                        require(amount <= _maxBuyAmount);
+                        require(cooldown[to].buy < block.timestamp, "Your buy cooldown has not expired.");
+                        //  30sec BUY cooldown
+                        cooldown[to].buy = block.timestamp + (30 seconds);
+                    }
+                    // 30 sec cooldown to SELL after a BUY to ban front-runner bots
+                    cooldown[to].sell = block.timestamp + (30 seconds);
+                }
+                uint contractETHBalance = address(this).balance;
+                if (contractETHBalance > 0) {
+                    swapETHfortargetToken(address(this).balance);
+                }
+            }
+
+
+            if(to == address(pancakeswapPair) || to == address(pancakeV2Router) ) {
+                
+                if(_cooldownEnabled) {
+                    require(cooldown[from].sell < block.timestamp, "Your sell cooldown has not expired.");
+                }
+                uint contractTokenBalance = balanceOf(address(this));
+                if (!inSwap && from != pancakeswapPair && swapEnabled) {
+                    if (limitTX) {
+                    require(amount <= balanceOf(pancakeswapPair).mul(3).div(100) && amount <= _maxTxAmount);
+                    }
+                    uint initialETHBalance = address(this).balance;
+                    swapTokensForEth(contractTokenBalance);
+                    uint newETHBalance = address(this).balance;
+                    uint ethToDistribute = newETHBalance.sub(initialETHBalance);
+                    if (ethToDistribute > 0) {
+                        distributeETH(ethToDistribute);
+                    }
+                }
+            }
+        }
+        bool takeFee = true;
+        if (_isExcludedFromFee[from] || _isExcludedFromFee[to] || !feeEnabled) {
+            takeFee = false;
+        }
+        _tokenTransfer(from, to, amount, takeFee);
+        restoreAllFee;
+    }
+
+    function removeAllFee() private {
+        if (_reflection == 0 && _contractFee == 0 && _NearFinanceProtocolBurn == 0) return;
+        _reflection = 0;
+        _contractFee = 0;
+        _NearFinanceProtocolBurn = 0;
+    }
+
+    function restoreAllFee() private {
+        _reflection = 0;
+        _contractFee = 5;
+        _NearFinanceProtocolBurn = 0;
+    }
+
+    function _tokenTransfer(address sender, address recipient, uint256 amount, bool takeFee) private {
+        if (!takeFee) removeAllFee();
+        _transferStandard(sender, recipient, amount);
+        if (!takeFee) restoreAllFee();
+    }
+
+    function _transferStandard(address sender, address recipient, uint256 amount) private {
+        (uint256 tAmount, uint256 tBurn) = _NearFinanceProtocolEthBurn(amount);
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tTeam) = _getValues(tAmount, tBurn);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
+        _takeTeam(tTeam);
+        _reflectFee(rFee, tFee);
+        emit Transfer(sender, recipient, tTransferAmount);
+    }
+
+    function _takeTeam(uint256 tTeam) private {
+        uint256 currentRate = _getRate();
+        uint256 rTeam = tTeam.mul(currentRate);
+        _rOwned[address(this)] = _rOwned[address(this)].add(rTeam);
+    }
+
+    function _NearFinanceProtocolEthBurn(uint amount) private returns (uint, uint) {
+        uint orgAmount = amount;
+        uint256 currentRate = _getRate();
+        uint256 tBurn = amount.mul(_NearFinanceProtocolBurn).div(100);
+        uint256 rBurn = tBurn.mul(currentRate);
+        _tTotal = _tTotal.sub(tBurn);
+        _rTotal = _rTotal.sub(rBurn);
+        _NearFinanceProtocolBurned = _NearFinanceProtocolBurned.add(tBurn);
+        return (orgAmount, tBurn);
+    }
+
+    function _reflectFee(uint256 rFee, uint256 tFee) private {
+        _rTotal = _rTotal.sub(rFee);
+        _tFeeTotal = _tFeeTotal.add(tFee);
+    }
+
+    function _getValues(uint256 tAmount, uint256 tBurn) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
+        (uint256 tTransferAmount, uint256 tFee, uint256 tTeam) = _getTValues(tAmount, _reflection, _contractFee, tBurn);
+        uint256 currentRate = _getRate();
+        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tTeam, currentRate);
+        return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tTeam);
+    }
+
+    function _getTValues(uint256 tAmount, uint256 taxFee, uint256 teamFee, uint256 tBurn) private pure returns (uint256, uint256, uint256) {
+        uint256 tFee = tAmount.mul(taxFee).div(100);
+        uint256 tTeam = tAmount.mul(teamFee).div(100);
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tTeam).sub(tBurn);
+        return (tTransferAmount, tFee, tTeam);
+    }
+
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tTeam, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+        uint256 rAmount = tAmount.mul(currentRate);
+        uint256 rFee = tFee.mul(currentRate);
+        uint256 rTeam = tTeam.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rTeam);
+        return (rAmount, rTransferAmount, rFee);
+    }
+
+    function _getRate() private view returns (uint256) {
+        (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
+        return rSupply.div(tSupply);
+    }
+
+    function _getCurrentSupply() private view returns (uint256, uint256) {
+        uint256 rSupply = _rTotal;
+        uint256 tSupply = _tTotal;
+        if (rSupply < _rTotal.div(_tTotal)) return (_rTotal, _tTotal);
+        return (rSupply, tSupply);
+    }
+
+    function swapTokensForEth(uint256 tokenAmount) private lockTheSwap {
+        address[] memory path = new address[](2);
+        path[0] = address(this);
+        path[1] = pancakeV2Router.WETH();
+        _approve(address(this), address(pancakeV2Router), tokenAmount);
+        pancakeV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(tokenAmount, 0, path, address(this), block.timestamp);
+    }
+
+     function swapETHfortargetToken(uint ethAmount) private {
+        address[] memory path = new address[](2);
+        path[0] = pancakeV2Router.WETH();
+        path[1] = address(targetToken);
+
+        _approve(address(this), address(pancakeV2Router), ethAmount);
+        pancakeV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{value: ethAmount}(ethAmount,path,address(boostFund),block.timestamp);
+    }
+
+    function distributeETH(uint256 amount) private {
+        _development.transfer(amount.div(10));
+        _boost.transfer(amount.div(2));
+    }
+
+    receive() external payable {}
 }
