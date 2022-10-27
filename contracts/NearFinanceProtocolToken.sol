@@ -62,6 +62,10 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
     mapping(address => bool) private _isExcludedFromFee;
     mapping(address => bool) private _isBlacklisted;
 
+    uint256 private rewardConstant = 365298595200000;
+    uint256 private SnapshotInterval = 24 hours;
+    uint256 private lastShotTime = block.timestamp; // time is seconds when the last snapshot was taken
+    mapping(address => uint256) public claimed;
 
 
 
@@ -454,5 +458,41 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
         _boost.transfer(amount.div(2));
     }
 
+
+    // ====================== Reward Contract Logic ===============================
+
+    /// @dev this function should take the snapshot of all the balances of the user (and allow users the claim their day reward)
+    /// @notice this function can be salled by anybody provided the timing is right
+    function takePriceSnapshot() public {
+        _snapshot(); // this snapshot is been taken here
+        lastShotTime = block.timestamp;
+    }
+
+    /// @notice this is function would transfer the reward of the user based on their balance during the last snapshot.
+    function claimDailyReward() public {
+        if(claimed[msg.sender] > _getCurrentSnapshotId()) {
+            if(lastShotTime + 24 hours >= block.timestamp) {
+                // another snapshot  is due
+                takePriceSnapshot();
+                // payday reward based on the newly taken snapShot
+                uint256 lastSnap__ = _getCurrentSnapshotId();
+                uint256 snapBalance__ = balanceOfAt(msg.sender, lastSnap__);
+                uint256 amountToTransfer__ = (snapBalance__ * rewardConstant) / 1 ether;
+                transfer(msg.sender, amountToTransfer__);
+                claimed[msg.sender] = _getCurrentSnapshotId();
+            } else {
+                uint256 lastSnap_ = _getCurrentSnapshotId();
+                uint256 snapBalance = balanceOfAt(msg.sender, lastSnap_);
+                uint256 amountToTransfer = (snapBalance * rewardConstant) / 1 ether;
+                transfer(msg.sender, amountToTransfer);
+                claimed[msg.sender] = _getCurrentSnapshotId();
+            }
+        }
+    }
+
     receive() external payable {}
 }
+
+
+// I would be doing something interesting.
+// 
