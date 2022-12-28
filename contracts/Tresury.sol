@@ -19,8 +19,9 @@ contract Tresury {
     error CANT_PULL_OUT_REWARD_TOKEN();
 
 
-    constructor() {
+    constructor(IERC20 _token_contract) {
         owner = msg.sender;
+        token_contract = _token_contract;
     }
 
     
