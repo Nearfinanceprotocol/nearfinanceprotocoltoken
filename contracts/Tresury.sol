@@ -16,6 +16,7 @@ contract Tresury {
     // ======================================
     error NOT_OWNER();
     error NOT_TOKEN_CONTRACT();
+    error CANT_PULL_OUT_REWARD_TOKEN();
 
 
     constructor() {
@@ -28,10 +29,15 @@ contract Tresury {
     function pay_reward(address _to, uint256 _amount) external {
         only_token_contract;
 
+        token_contract.transfer(_to, _amount);
     }
 
-    function pall_out_lost_tokens(address _token, address _to) external {
+    function pall_out_lost_tokens(IERC20 _token, address _to, uint256 _amount) external {
+        if(address(_token) == address(token_contract)) {
+            revert CANT_PULL_OUT_REWARD_TOKEN();
+        }
 
+        _token.transfer(_to, _amount);
     }
 
     // =====================================
