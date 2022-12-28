@@ -11,6 +11,13 @@ contract Tresury {
     address public owner;
 
 
+    // ======================================
+    // -> Custom Errors
+    // ======================================
+    error NOT_OWNER();
+    error NOT_TOKEN_CONTRACT();
+
+
     constructor() {
         owner = msg.sender;
     }
@@ -19,6 +26,7 @@ contract Tresury {
     /// @notice function would be used to send reward token to users 
     /// @dev this function can only be called by token contract 
     function pay_reward(address _to, uint256 _amount) external {
+        only_token_contract;
 
     }
 
@@ -29,22 +37,28 @@ contract Tresury {
     // =====================================
     // -> Auth Guard 
     // ====================================
-    function set_owner(address _new_owner) external {
-
+    function set_owner(address _owner) external {
+        only_owner;
+        owner = _owner;
     }
 
-    function set_token_contract(address _token_contract) external {
-
+    function set_token_contract(IERC20 _token_contract) external {
+        only_owner;
+        token_contract = _token_contract;
     }
 
     // =====================================
     // -> Internal Function Modifers
     // =====================================
     function only_token_contract() internal view {
-
+        if(msg.sender != address(token_contract)) {
+            revert NOT_TOKEN_CONTRACT();
+        }
     }
 
     function only_owner() internal view {
-
+        if(msg.sender != owner) {
+            revert NOT_OWNER();
+        }
     }
 }
