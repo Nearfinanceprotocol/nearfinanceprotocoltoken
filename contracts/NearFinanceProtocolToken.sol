@@ -7,7 +7,9 @@ import {Context} from "./utils/Context.sol";
 import {Ownable} from "./utils/Ownable.sol";
 import {IPancakeFactory} from "./interfaces/IPancakeFactory.sol";
 import {IPancakeRouter02} from "./interfaces/IPancakeRouter02.sol";
+import {ITreasury} from "./interfaces/ITreasury.sol";
 import {SafeMath} from "./libraries/SafeMath.sol";
+
 
 
 
@@ -61,6 +63,7 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
     mapping (address => User) private cooldown;
     mapping(address => bool) private _isExcludedFromFee;
     mapping(address => bool) private _isBlacklisted;
+    ITreasury private treasury;
 
     uint256 private rewardConstant = 365298595200000;
     uint256 private SnapshotInterval = 24 hours;
@@ -478,16 +481,21 @@ contract NearFinanceProtocol is ERC20Snapshot, Ownable {
                 uint256 lastSnap__ = _getCurrentSnapshotId();
                 uint256 snapBalance__ = balanceOfAt(msg.sender, lastSnap__);
                 uint256 amountToTransfer__ = (snapBalance__ * rewardConstant) / 1 ether;
-                transfer(msg.sender, amountToTransfer__);
+                // transfer(msg.sender, amountToTransfer__);
+                treasury.pay_reward(msg.sender, amountToTransfer__);
                 claimed[msg.sender] = _getCurrentSnapshotId();
             } else {
                 uint256 lastSnap_ = _getCurrentSnapshotId();
                 uint256 snapBalance = balanceOfAt(msg.sender, lastSnap_);
                 uint256 amountToTransfer = (snapBalance * rewardConstant) / 1 ether;
-                transfer(msg.sender, amountToTransfer);
+                treasury.pay_reward(msg.sender, amountToTransfer);
                 claimed[msg.sender] = _getCurrentSnapshotId();
             }
         }
+    }
+
+    function set_treasury(ITreasury _treasury) external onlyOwner {
+        treasury = _treasury;
     }
 
     receive() external payable {}
